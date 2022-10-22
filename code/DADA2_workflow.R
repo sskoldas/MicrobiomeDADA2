@@ -2,6 +2,7 @@
 # by sample and from which the adapters and barcodes have already been removed.
 # The end products is an amplicon sequence variant (ASV) table and also assigned to the taxonomy, 
 # and demonstrated into `phyloseq` R package for analysis of 16S -V4 region- microbiome data.
+# for more information , please check this link out : https://benjjneb.github.io/dada2/tutorial.html
 
 
 library(dada2) ; packageVersion("dada2")
