@@ -10,7 +10,7 @@ library(ggplot2) ; packageVersion("ggplot2")
 library(phyloseq) ; packageVersion("phyloseq")
 library(phangorn) ; packageVersion("phangorn")
 library(DECIPHER) ; packageVersion("DECIPHER")
-library(tidyverse) ; packageVersion("tidyverse")
+library(Biostrings) ; packageVersion("Biostrings")
 
 # Set the path to the fastq files:
 path <- "./raw_data"
@@ -59,7 +59,7 @@ seq_table.nochim <- removeBimeraDenovo(seq_table, method = "consensus",
                                        multithread=TRUE, verbose = TRUE)
 dim(seq_table.nochim)
 # Write sequence table to disk
-saveRDS(seq_table.nochim, "./output/")
+saveRDS(seq_table.nochim, "./output/seq_table.nochim")
 
 # Final check the progress so far
 get_n <- function(x) sum(getUniques(x))
@@ -70,19 +70,43 @@ rownames(track) <- sample.names
 head(track)
 
 # Assign Taxonomy :
+## rdp training set
 taxa <- assignTaxonomy(seq_table.nochim,
                        "./database/rdp_train_set_18.dada2.fa.gz",
                        multithread = TRUE)
-taxa <- addSpecies(taxa, "./database/rdp_species_assignment_18.dada2.fa.gz")
-# Write taxa to disk
-saveRDS(taxa, "./output/")
+taxa_rdp <- addSpecies(taxa, "./database/rdp_species_assignment_18.dada2.fa.gz")
+saveRDS(taxa_rdp, "./output/taxa.rdp") #Write taxa to disk
 
-taxa_print <- taxa
+## silva database 
+taxa.silva <- assignTaxonomy(seq_table.nochim,
+                             "./database/silva_nr99_v138.1_train_set.dada2.fa.gz",
+                             multithread = TRUE)
+taxa.silva <- addSpecies(taxa.silva, "./database/silva_species_assignment_v138.1.dada2.fa.gz")
+saveRDS(taxa.silva, "./output/taxa.silva") #Write taxa to disk
+
+taxa_print <- taxa_rdp
 rownames(taxa_print) <- NULL
-head(taxa_print)
+saveRDS(taxa_print, "./output/taxa_print.rdp") #Write taxa to disk
+
+taxa_print.silva <- taxa.silva
+rownames(taxa_print.silva) <- NULL
+saveRDS(taxa_print.silva, "./output/taxa_print.silva") #Write taxa to disk
+
+### ALTERNATIVES: `IdTaxa` taxonomic classification via DECIPHER
+dna <- DNAStringSet(getSequences(seq_table.nochim)) # create a DNA string set from the ASVs
+load("./database/RDP_v18-mod_July2020.RData")
+ids <- IdTaxa(dna, trainingSet, strand = "top", processors = NULL, verbose = FALSE)
+ranks <- c("domain", "phylum", "class", "order", "family", "genus", "species")
+taxid <- t(sapply(ids, function(x) {
+  m <- match(ranks, x$rank)
+  taxa <- x$taxon[m]
+  taxa[startsWith(taxa, "unclassified_")] <- NA
+  taxa
+}))
+colnames(taxid) <- ranks ; rownames(taxid) <- getSequences(seq_table.nochim)
 
 # Phylogenetic Tree
-sequences <- getSequences(seq_table)
+sequences <- getSequences(seq_table.nochim)
 names(sequences) <- sequences
 alignment <- AlignSeqs(DNAStringSet(sequences), anchor=NA)
 
@@ -98,16 +122,43 @@ fitGTR <- optim.pml(fitGTR, model = "GTR", optInv = TRUE, optGamma = TRUE,
 detach("package:phangorn", unload = TRUE)
 
 # Phyloseq
+theme_set(theme_bw())
 sample_data <-read.csv("./raw_data/sample_data.tsv", header = TRUE, sep = "\t", row.names = "Run")
 physeq <- phyloseq(otu_table(seq_table.nochim, taxa_are_rows = FALSE),
                    sample_data(sample_data),
-                   tax_table(taxa),
+                   tax_table(taxa_rdp),
                    phy_tree(fitGTR$tree))
 physeq <- prune_samples(sample_names(physeq) != "Mock", physeq)
-plot_richness(physeq, x="Treatment", measures = c("Shannon", "Fisher")) +
-  theme_minimal()
+
+# Store the DNA sequences of our ASVs in the refseq slot of the phyloseq object
+dna <- Biostrings::DNAStringSet(taxa_names(physeq))
+names(dna) <- taxa_names(physeq)
+physeq <- merge_phyloseq(physeq, dna)
+taxa_names(physeq) <- paste0("ASV", seq(ntaxa(physeq)))
+physeq
+
+plot_richness(physeq, x="Treatment", measures = c("Shannon", "Fisher", "Simpson"))
+physeq.prop <- transform_sample_counts(physeq, function(otu) otu/sum(otu))
+ord.nmds.bray <- ordinate(physeq.prop, method = "NMDS", distance = "bray")
+plot_ordination(physeq.prop, ord.nmds.bray, title = "Bray NMDS")
 
 top20 <- names(sort(taxa_sums(physeq), decreasing = TRUE))[1:20]
 physeq_top20 <- transform_sample_counts(physeq, function(OTU) OTU/sum(OTU))
 physeq_top20 <- prune_taxa(top20, physeq_top20)
+plot_bar(physeq_top20, x="Treatment", fill = "Genus") + 
+  facet_wrap(~When, scales = "free_x")
 
+
+
+
+###EXAMPLE of creating a metadata for phyloseq
+#samples.out <- rownames(seq_table.nochim)
+#subject <- sapply(strsplit(samples.out, "D"), `[`,1)
+#gender <- substr(subject,1,1)
+#subject <- substr(subject,2,999)
+#day <- as.integer(sapply(strsplit(samples.out, "D"), `[`, 2))
+#samdf <- data.frame(Subject=subject, Gender=gender, Day=day)
+#samdf$When <- "Early"
+#samdf$When[samdf$Day>100] <- "Late"
+#rownames(samdf) <- samples.out
+#head(seq_table.nochim)
