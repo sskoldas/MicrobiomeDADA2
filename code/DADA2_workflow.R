@@ -58,6 +58,8 @@ dim(seq_table)
 seq_table.nochim <- removeBimeraDenovo(seq_table, method = "consensus",
                                        multithread=TRUE, verbose = TRUE)
 dim(seq_table.nochim)
+# Write sequence table to disk
+saveRDS(seq_table.nochim, "./output/")
 
 # Final check the progress so far
 get_n <- function(x) sum(getUniques(x))
@@ -72,6 +74,9 @@ taxa <- assignTaxonomy(seq_table.nochim,
                        "./database/rdp_train_set_18.dada2.fa.gz",
                        multithread = TRUE)
 taxa <- addSpecies(taxa, "./database/rdp_species_assignment_18.dada2.fa.gz")
+# Write taxa to disk
+saveRDS(taxa, "./output/")
+
 taxa_print <- taxa
 rownames(taxa_print) <- NULL
 head(taxa_print)
