@@ -11,6 +11,8 @@ library(phyloseq) ; packageVersion("phyloseq")
 library(phangorn) ; packageVersion("phangorn")
 library(DECIPHER) ; packageVersion("DECIPHER")
 library(Biostrings) ; packageVersion("Biostrings")
+library(kableExtra) ; packageVersion("kableExtra")
+library(tidyverse) ; packageVersion("tidyverse")
 
 # Set the path to the fastq files:
 path <- "./raw_data"
@@ -23,22 +25,23 @@ sample.names <- sapply(strsplit(basename(raw_read), ".fastq"),
 head(sample.names)
 
 # Check the quality of first six reads
-plotQualityProfile(raw_read[1:6])
+set.seed(1234)
+plotQualityProfile(raw_read)
 
 # Place filtered files in filtered/ subdirectory
 filtered_path <- file.path(path, "filtered")
 filtered_read <- file.path(filtered_path, paste0(sample.names, "_filtered.fastq.gz"))
 
 # Filter and Trimming:
-out <- filterAndTrim(raw_read, filtered_read, truncLen = 240, maxN = 0,
-              maxEE = 3,  truncQ = 2, rm.phix = TRUE, compress = TRUE,
+out <- filterAndTrim(raw_read, filtered_read, truncLen = 250, maxN = 0,
+              maxEE = 2,  truncQ = 2, rm.phix = TRUE, compress = TRUE,
               multithread = TRUE)
 head(out)
 plotQualityProfile(filtered_read[1:6])
 
 # Learn the error rates: The DADA2 algorithm depends on a parametric error model
 # and every amplicon dataset has a slightly different error rate. 
-err <- learnErrors(filtered_read, multithread = TRUE)
+err <- learnErrors(filtered_read, nbases = 1e7, multithread = TRUE)
 plotErrors(err, nominalQ = TRUE) + theme_minimal()
 
 # Dereplication combines all identical sequencing reads into "uniques sequences"
@@ -50,11 +53,11 @@ names(derep) <- sample.names
 dada_reads <-dada(derep, err = err, multithread = TRUE)
 dada_reads[[1]]
 
-# Construct sequence table
+# Construct sequence table: This table is a matrix with each row representing the samples, columns are the various ASVs, and each cell shows the number of that specific ASV within each sample.
 seq_table <- makeSequenceTable(dada_reads)
 dim(seq_table)
 
-# Remove chimeras
+# Remove chimeras: dada2 will align each ASV to the other ASVs, and if an ASV’s left and right side align to two separate more abundant ASVs, the it will be flagged as a chimera and removed.
 seq_table.nochim <- removeBimeraDenovo(seq_table, method = "consensus",
                                        multithread=TRUE, verbose = TRUE)
 dim(seq_table.nochim)
@@ -67,7 +70,7 @@ track <- cbind(out, sapply(dada_reads, get_n), rowSums(seq_table),
                rowSums(seq_table.nochim))
 colnames(track) <- c("input", "filtered", "denoised", "tabled", "nochim")
 rownames(track) <- sample.names
-head(track)
+kableExtra::kable(track)
 
 # Assign Taxonomy :
 ## rdp training set
@@ -93,17 +96,17 @@ rownames(taxa_print.silva) <- NULL
 saveRDS(taxa_print.silva, "./output/taxa_print.silva") #Write taxa to disk
 
 ### ALTERNATIVES: `IdTaxa` taxonomic classification via DECIPHER
-dna <- DNAStringSet(getSequences(seq_table.nochim)) # create a DNA string set from the ASVs
-load("./database/RDP_v18-mod_July2020.RData")
-ids <- IdTaxa(dna, trainingSet, strand = "top", processors = NULL, verbose = FALSE)
-ranks <- c("domain", "phylum", "class", "order", "family", "genus", "species")
-taxid <- t(sapply(ids, function(x) {
-  m <- match(ranks, x$rank)
-  taxa <- x$taxon[m]
-  taxa[startsWith(taxa, "unclassified_")] <- NA
-  taxa
-}))
-colnames(taxid) <- ranks ; rownames(taxid) <- getSequences(seq_table.nochim)
+#dna <- DNAStringSet(getSequences(seq_table.nochim)) # create a DNA string set from the ASVs
+#load("./database/RDP_v18-mod_July2020.RData")
+#ids <- IdTaxa(dna, trainingSet, strand = "top", processors = NULL, verbose = FALSE)
+#ranks <- c("domain", "phylum", "class", "order", "family", "genus", "species")
+#taxid <- t(sapply(ids, function(x) {
+#  m <- match(ranks, x$rank)
+#  taxa <- x$taxon[m]
+#  taxa[startsWith(taxa, "unclassified_")] <- NA
+#  taxa
+#}))
+#colnames(taxid) <- ranks ; rownames(taxid) <- getSequences(seq_table.nochim)
 
 # Phylogenetic Tree
 sequences <- getSequences(seq_table.nochim)
@@ -130,12 +133,16 @@ physeq <- phyloseq(otu_table(seq_table.nochim, taxa_are_rows = FALSE),
                    phy_tree(fitGTR$tree))
 physeq <- prune_samples(sample_names(physeq) != "Mock", physeq)
 
+# Rename ASVs to "ASV1, ASV2..."
 # Store the DNA sequences of our ASVs in the refseq slot of the phyloseq object
 dna <- Biostrings::DNAStringSet(taxa_names(physeq))
 names(dna) <- taxa_names(physeq)
 physeq <- merge_phyloseq(physeq, dna)
 taxa_names(physeq) <- paste0("ASV", seq(ntaxa(physeq)))
 physeq
+
+rank_names(physeq)
+table(tax_table(physeq)[, "Phylum"])
 
 plot_richness(physeq, x="Treatment", measures = c("Shannon", "Fisher", "Simpson"))
 physeq.prop <- transform_sample_counts(physeq, function(otu) otu/sum(otu))
